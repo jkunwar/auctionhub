@@ -1,0 +1,9 @@
+{
+  "name": "@auctionhub/frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'Frontend not scaffolded yet — coming in Task #5'",
+    "build": "echo 'Frontend not scaffolded yet'"
+  }
+}

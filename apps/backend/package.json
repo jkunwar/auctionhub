@@ -1,0 +1,9 @@
+{
+  "name": "@auctionhub/backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'Backend not scaffolded yet — coming in Task #4'",
+    "build": "echo 'Backend not scaffolded yet'"
+  }
+}
