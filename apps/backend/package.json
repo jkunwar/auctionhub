@@ -3,7 +3,22 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "echo 'Backend not scaffolded yet — coming in Task #4'",
-    "build": "echo 'Backend not scaffolded yet'"
+    "dev": "dotenv -e ../../.env -- ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@auctionhub/database": "workspace:*",
+    "@fastify/env": "^4.4.0",
+    "@prisma/client": "^5.22.0",
+    "fastify": "^4.28.0",
+    "fastify-plugin": "^4.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "dotenv-cli": "^7.4.4",
+    "pino-pretty": "^13.0.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.6.0"
   }
 }

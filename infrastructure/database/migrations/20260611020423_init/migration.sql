@@ -144,7 +144,7 @@ CREATE TABLE "orders" (
     "listing_id" UUID NOT NULL,
     "buyer_id" UUID NOT NULL,
     "final_price" INTEGER NOT NULL,
-    "supplier_payout" INTEGER,
+    "supplier_payout" INTEGER NOT NULL,
     "status" "OrderStatus" NOT NULL DEFAULT 'pending_pickup',
     "pickup_slot_id" UUID,
     "admin_notes" TEXT,
@@ -340,3 +340,18 @@ ALTER TABLE "notifications" ADD CONSTRAINT "notifications_user_id_fkey" FOREIGN 
 
 -- AddForeignKey
 ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "user_roles" ADD CONSTRAINT "user_roles_assigned_by_fkey" FOREIGN KEY ("assigned_by") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddCheckConstraint
+ALTER TABLE "ratings" ADD CONSTRAINT "ratings_stars_range" CHECK ("stars" >= 1 AND "stars" <= 5);
+
+-- AddCheckConstraint
+ALTER TABLE "pickup_slots" ADD CONSTRAINT "pickup_slots_bookings_valid" CHECK ("current_bookings" >= 0 AND "current_bookings" <= "max_bookings");
+
+-- AddCheckConstraint
+ALTER TABLE "bids" ADD CONSTRAINT "bids_proxy_max_valid" CHECK (
+  ("bid_type" = 'manual' AND "proxy_max" IS NULL) OR
+  ("bid_type" = 'proxy' AND "proxy_max" IS NOT NULL AND "proxy_max" >= "amount")
+);
