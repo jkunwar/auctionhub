@@ -92,6 +92,7 @@ model User {
 
   // Relations
   roles               UserRole[]
+  assignedRoles       UserRole[]      @relation("UserRoleAssigner")
   sellerProfile       SellerProfile?
   supplier            Supplier?       // Set if this user is also a supplier/consignor
   bids                Bid[]
@@ -122,8 +123,9 @@ model UserRole {
   assignedAt DateTime @default(now()) @map("assigned_at")
   assignedBy String?  @map("assigned_by") @db.Uuid // admin who granted the role
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user     User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assigner User? @relation("UserRoleAssigner", fields: [assignedBy], references: [id], onDelete: SetNull)
 
   @@id([userId, roleId])
   @@map("user_roles")
@@ -294,7 +296,8 @@ model Order {
   finalPrice     Int         @map("final_price")       // Winning bid in NPR paisa
   // Supplier payout calculated at order creation from supplier.commissionBps
   // e.g. finalPrice=100000 paisa, commissionBps=7000 → supplierPayout=70000 paisa
-  supplierPayout Int?        @map("supplier_payout")   // What operator owes the supplier
+  // Use 0 when the listing has no linked supplier
+  supplierPayout Int         @map("supplier_payout")   // What operator owes the supplier
   status         OrderStatus @default(pending_pickup)
   pickupSlotId   String?     @map("pickup_slot_id") @db.Uuid
   adminNotes     String?     @map("admin_notes")
