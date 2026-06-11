@@ -1,0 +1,398 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// AuctionHub Nepal — Prisma Schema
+// Version: 0.3
+//
+// Key design decisions:
+//   - Roles system (not boolean flags) for multi-role scalability
+//   - seller_profiles table separate from users for clean v1.1 expansion
+//   - suppliers table tracks consignors (optional link to a user account)
+//   - All prices stored as integers in NPR paisa to avoid float issues
+//   - All IDs are UUIDs via gen_random_uuid() (pgcrypto extension)
+//   - All timestamps in UTC
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum RoleName {
+  buyer   // Default for all registered users
+  seller  // Unlocked after admin onboards the seller (v1.1: self-serve KYC)
+  staff   // Operator staff — manage listings and orders, not users
+  admin   // Full access
+}
+
+enum ListingStatus {
+  draft      // Admin saved but not published yet
+  active     // Auction is live and accepting bids
+  completed  // Auction ended (winner found or reserve not met)
+  cancelled  // Admin cancelled before or during auction
+}
+
+enum AuctionStatus {
+  active
+  completed
+  cancelled
+}
+
+enum BidType {
+  manual  // Buyer entered a specific amount
+  proxy   // System auto-bid on behalf of buyer up to their max
+}
+
+enum OrderStatus {
+  pending_pickup  // Winner determined, waiting for pickup to be scheduled
+  scheduled       // Winner has booked a pickup slot
+  completed       // Admin confirmed in-store payment and handover
+  no_show         // Winner did not show up at scheduled time
+  cancelled       // Order cancelled (e.g. winner forfeited)
+}
+
+enum KycStatus {
+  not_submitted  // Profile exists but KYC not yet filed
+  pending        // KYC submitted, awaiting admin review
+  approved       // KYC approved
+  rejected       // KYC rejected, can resubmit
+}
+
+enum NotificationType {
+  outbid
+  auction_ending_24h
+  auction_ending_1h
+  auction_won
+  auction_closed_no_winner
+  pickup_reminder
+  order_completed
+  auction_extended
+  listing_published
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USERS & ROLES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String   @unique
+  passwordHash  String   @map("password_hash")
+  emailVerified Boolean  @default(false) @map("email_verified")
+  accountActive Boolean  @default(true) @map("account_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  roles               UserRole[]
+  sellerProfile       SellerProfile?
+  supplier            Supplier?       // Set if this user is also a supplier/consignor
+  bids                Bid[]
+  orders              Order[]
+  auctionsLeading     Auction[]       @relation("HighestBidderRelation") // Auctions where this user is currently winning
+  ratingsGiven        Rating[]        @relation("RaterRelation")
+  notifications       Notification[]
+  auditLogs           AuditLog[]
+  listingsCreated     Listing[]       @relation("ListingCreator")
+
+  @@map("users")
+}
+
+// Roles — add new roles by inserting rows, not changing code
+model Role {
+  id   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name RoleName @unique
+
+  users UserRole[]
+
+  @@map("roles")
+}
+
+// Join table — one user can hold multiple roles simultaneously
+model UserRole {
+  userId     String   @map("user_id") @db.Uuid
+  roleId     String   @map("role_id") @db.Uuid
+  assignedAt DateTime @default(now()) @map("assigned_at")
+  assignedBy String?  @map("assigned_by") @db.Uuid // admin who granted the role
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPLIERS (CONSIGNORS)
+// Tracks people/businesses who bring items to the operator for auction.
+//
+// userId is optional — a supplier may or may not have a buyer account.
+// If they do, linking them here lets the operator see their bidding activity
+// and easily upgrade them to a self-serve seller in v1.1.
+//
+// MVP: admin creates and manages supplier records manually.
+// v1.1: suppliers may self-register and link their own account.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Supplier {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String?  @unique @map("user_id") @db.Uuid // optional link to a user account
+  name          String                                     // Person or business name
+  phone         String?                                    // Primary contact number
+  email         String?                                    // Contact email (internal only)
+  address       String?                                    // Physical address
+  notes         String?  @db.Text                          // Admin notes (e.g. "prefers cash payout")
+  // Commission / payout split — how much the supplier gets from the final sale
+  // Stored as integer basis points: 7000 = 70.00%, 8500 = 85.00%
+  // Defaults to 7000 (70%) — operator keeps 30% as commission + platform fee
+  commissionBps Int      @default(7000) @map("commission_bps")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user     User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  listings Listing[]
+
+  @@index([isActive])
+  @@map("suppliers")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SELLER PROFILES
+// For users who sell on the platform (v1.1 self-serve sellers).
+// In MVP this is unused — suppliers are tracked via the Supplier table above.
+// Keeping this table now means zero schema changes when v1.1 arrives.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SellerProfile {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @unique @map("user_id") @db.Uuid
+  displayName String    @map("display_name")
+  contactInfo String    @map("contact_info")   // Internal only — never sent to buyers
+  kycStatus   KycStatus @default(not_submitted) @map("kyc_status")
+  kycNotes    String?   @map("kyc_notes")
+  approvedAt  DateTime? @map("approved_at")
+  approvedBy  String?   @map("approved_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listings Listing[]
+
+  @@map("seller_profiles")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LISTINGS
+// Created by admin/staff on behalf of suppliers (MVP).
+// supplierId links to who brought the item.
+// createdBy is the operator staff member who entered it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Listing {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdBy       String        @map("created_by") @db.Uuid        // Staff/admin who entered it
+  supplierId      String?       @map("supplier_id") @db.Uuid       // Who brought the item
+  sellerProfileId String?       @map("seller_profile_id") @db.Uuid // For v1.1 self-serve sellers
+  title           String        @db.VarChar(100)
+  description     String        @db.Text
+  category        String
+  condition       String        // "New" | "Like New" | "Good" | "Fair" | "For Parts"
+  location        String
+  photos          String[]      // Supabase Storage URLs (max 20)
+  videoUrl        String?       @map("video_url")
+  startingPrice   Int           @map("starting_price")  // NPR paisa
+  reservePrice    Int?          @map("reserve_price")   // Hidden from buyers
+  status          ListingStatus @default(draft)
+  publishedAt     DateTime?     @map("published_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  creator       User           @relation("ListingCreator", fields: [createdBy], references: [id])
+  supplier      Supplier?      @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  sellerProfile SellerProfile? @relation(fields: [sellerProfileId], references: [id])
+  auction       Auction?
+  orders        Order[]
+
+  @@index([status])
+  @@index([category])
+  @@index([supplierId])
+  @@index([createdAt])
+  @@map("listings")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUCTIONS
+// One per listing. Created atomically when listing is published.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Auction {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  listingId       String        @unique @map("listing_id") @db.Uuid
+  startTime       DateTime      @map("start_time")
+  endTime         DateTime      @map("end_time")            // Extended by anti-sniping
+  currentPrice    Int           @map("current_price")       // Updated on every bid
+  highestBidderId String?       @map("highest_bidder_id") @db.Uuid
+  bidCount        Int           @default(0) @map("bid_count")
+  status          AuctionStatus @default(active)
+  extendedCount   Int           @default(0) @map("extended_count")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  listing       Listing @relation(fields: [listingId], references: [id])
+  highestBidder User?   @relation("HighestBidderRelation", fields: [highestBidderId], references: [id])
+  bids          Bid[]
+  orders        Order[]
+
+  @@index([status])
+  @@index([endTime]) // BullMQ close job scheduling
+  @@map("auctions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BIDS
+// Immutable — never updated or deleted. Full audit trail.
+// proxy_max is never exposed in any public API response.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Bid {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  auctionId String   @map("auction_id") @db.Uuid
+  bidderId  String   @map("bidder_id") @db.Uuid
+  amount    Int                          // NPR paisa
+  bidType   BidType  @map("bid_type")
+  proxyMax  Int?     @map("proxy_max")  // Only for proxy bids — NEVER expose publicly
+  isWinning Boolean  @default(false) @map("is_winning")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  auction Auction @relation(fields: [auctionId], references: [id])
+  bidder  User    @relation(fields: [bidderId], references: [id])
+
+  @@index([auctionId, createdAt])
+  @@index([auctionId, isWinning])
+  @@map("bids")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ORDERS
+// Created when auction closes with a winner.
+// supplierPayout tracks what the operator owes the supplier after completion.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Order {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  auctionId      String      @unique @map("auction_id") @db.Uuid
+  listingId      String      @map("listing_id") @db.Uuid
+  buyerId        String      @map("buyer_id") @db.Uuid
+  finalPrice     Int         @map("final_price")       // Winning bid in NPR paisa
+  // Supplier payout calculated at order creation from supplier.commissionBps
+  // e.g. finalPrice=100000 paisa, commissionBps=7000 → supplierPayout=70000 paisa
+  supplierPayout Int?        @map("supplier_payout")   // What operator owes the supplier
+  status         OrderStatus @default(pending_pickup)
+  pickupSlotId   String?     @map("pickup_slot_id") @db.Uuid
+  adminNotes     String?     @map("admin_notes")
+  scheduledAt    DateTime?   @map("scheduled_at")
+  completedAt    DateTime?   @map("completed_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  auction    Auction     @relation(fields: [auctionId], references: [id])
+  listing    Listing     @relation(fields: [listingId], references: [id])
+  buyer      User        @relation(fields: [buyerId], references: [id])
+  pickupSlot PickupSlot? @relation(fields: [pickupSlotId], references: [id])
+  rating     Rating?
+
+  @@index([buyerId])
+  @@index([status])
+  @@map("orders")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PICKUP SLOTS
+// Admin configures available dates and time slots.
+// current_bookings managed inside DB transactions to prevent overbooking.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PickupSlot {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  date            DateTime @db.Date
+  timeSlot        String   @map("time_slot")       // e.g. "10:00-11:00"
+  maxBookings     Int      @map("max_bookings")
+  currentBookings Int      @default(0) @map("current_bookings")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  orders Order[]
+
+  @@unique([date, timeSlot])
+  @@index([date, isActive])
+  @@map("pickup_slots")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RATINGS
+// One per order. Buyer rates after order is completed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Rating {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId   String   @unique @map("order_id") @db.Uuid
+  raterId   String   @map("rater_id") @db.Uuid
+  stars     Int      // 1–5
+  comment   String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+  rater User  @relation("RaterRelation", fields: [raterId], references: [id])
+
+  @@index([raterId])
+  @@map("ratings")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType
+  payload   Json             // { auctionId, listingTitle, amount, pickupDate, etc. }
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT LOGS
+// Immutable record of every sensitive action. Never deleted.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId    String   @map("actor_id") @db.Uuid
+  action     String   // e.g. "listing.published", "order.completed", "supplier.created"
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  metadata   Json?    // Old values, reason, extra context
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  actor User @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
