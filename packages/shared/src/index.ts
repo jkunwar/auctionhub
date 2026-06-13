@@ -1,28 +1,27 @@
-export type UserRole = 'buyer' | 'seller' | 'admin';
+export type RoleName = 'buyer' | 'seller' | 'staff' | 'admin'
 
-export type ListingStatus =
-  | 'draft'
-  | 'pending_approval'
-  | 'active'
+export type ListingStatus = 'draft' | 'active' | 'completed' | 'cancelled'
+
+export type AuctionStatus = 'active' | 'completed' | 'cancelled'
+
+export type BidType = 'manual' | 'proxy'
+
+export type OrderStatus =
+  | 'pending_pickup'
+  | 'scheduled'
   | 'completed'
+  | 'no_show'
   | 'cancelled'
-  | 'rejected';
 
-export type AuctionStatus = 'active' | 'completed' | 'cancelled';
+export type KycStatus = 'not_submitted' | 'pending' | 'approved' | 'rejected'
 
-export type PaymentStatus = 'pending' | 'paid' | 'refunded' | 'failed';
-
-export type PaymentGateway = 'esewa' | 'khalti' | 'connectips' | 'stripe';
-
-export type KycStatus =
-  | 'not_submitted'
-  | 'pending_kyc'
-  | 'kyc_approved'
-  | 'kyc_rejected';
-
-export type DisputeStatus = 'open' | 'resolved' | 'closed';
-
-export type DisputeOutcome =
-  | 'keep_with_seller'
-  | 'refund_buyer'
-  | 'issue_warning';
+export type NotificationType =
+  | 'outbid'
+  | 'auction_ending_24h'
+  | 'auction_ending_1h'
+  | 'auction_won'
+  | 'auction_closed_no_winner'
+  | 'pickup_reminder'
+  | 'order_completed'
+  | 'auction_extended'
+  | 'listing_published'
