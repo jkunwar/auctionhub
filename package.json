@@ -10,7 +10,8 @@
     "lint": "pnpm -r lint",
     "db:migrate": "pnpm --filter @auctionhub/database migrate",
     "db:studio": "pnpm --filter @auctionhub/database studio",
-    "db:generate": "pnpm --filter @auctionhub/database generate"
+    "db:generate": "pnpm --filter @auctionhub/database generate",
+    "test": "pnpm --filter @auctionhub/backend test"
   },
   "engines": {
     "node": ">=20.0.0",
